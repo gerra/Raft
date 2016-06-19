@@ -25,13 +25,13 @@ public class SetRequest extends Request implements LeaderOnly {
         while (Character.isSpaceChar(s.charAt(i)) || s.charAt(i) == '\n') {
             i++;
         }
-        String value = s.substring(i);
+        String value = s.substring(i + 1, s.length() - 1);
         return new SetRequest(name, value);
     }
 
     @Override
     public String asString() {
-        return "set " + key + " " + value;
+        return "set " + key + " \"" + value + "\"";
     }
 
     public String getKey() {

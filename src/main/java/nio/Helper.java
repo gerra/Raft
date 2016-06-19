@@ -3,7 +3,6 @@ package nio;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.TypeAdapter;
-import com.google.gson.TypeAdapterFactory;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import nio.model.DeleteCommand;
@@ -12,6 +11,7 @@ import nio.model.StateMachineCommand;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 
 /**
  * Created by root on 16.06.16.
@@ -65,4 +65,7 @@ public class Helper {
         return c;
     }
 
+    public static ByteBuffer convertStringToByteBuffer(String s) {
+        return ByteBuffer.wrap(s.getBytes());
+    }
 }

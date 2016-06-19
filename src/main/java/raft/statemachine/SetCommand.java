@@ -1,6 +1,5 @@
 package raft.statemachine;
 
-import com.sun.xml.internal.ws.policy.privateutil.PolicyUtils;
 import raft.Utils;
 
 import java.io.IOException;
@@ -56,6 +55,6 @@ public class SetCommand extends StateMachineCommand {
 
     @Override
     public String asString() {
-        return "set " + name + " \"" + value + "\"";
+        return "set " + name + " " + value;
     }
 }

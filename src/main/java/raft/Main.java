@@ -3,7 +3,6 @@ package raft;
 import nio.Log;
 import nio.NioServer;
 import nio.Properties;
-import raft.server.Server;
 
 import java.io.IOException;
 
@@ -21,7 +20,7 @@ public class Main {
                 if (nodeId == serverDescr.id) {
 //                Server server = new Server(serverDescr.id, properties, serverDescr.id == 1 ? Server.Role.LEADER : Server.Role.FOLLOWER);
 //                servers.add(server);
-                    NioServer nioServer = new NioServer(serverDescr, properties, NioServer.Role.CANDIDATE);
+                    NioServer nioServer = new NioServer(serverDescr, properties, NioServer.Role.FOLLOWER);
                 }
             } catch (IOException e) {
                 e.printStackTrace();

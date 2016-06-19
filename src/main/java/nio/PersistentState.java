@@ -16,13 +16,6 @@ class PersistentState {
     private Integer votedFor;
     private List<LogEntry> log = new ArrayList<>();
 
-    public void updateCurrentTerm(int newTerm) {
-        if (newTerm > currentTerm) {
-            currentTerm = newTerm;
-            votedFor = null;
-        }
-    }
-
     public PersistentState(String logFileName) throws IOException {
         this.logFileName = logFileName;
         log2FileName = logFileName + "e";
@@ -35,9 +28,11 @@ class PersistentState {
             log2File.createNewFile();
         }
         try (BufferedReader logReader = new BufferedReader(new FileReader(logFile))) {
-            String s = logReader.readLine();
-            if (s != null && !s.isEmpty()) {
-                log.add(Helper.gson.fromJson(s, LogEntry.class));
+            String s;
+            while ((s = logReader.readLine()) != null) {
+                if (!s.isEmpty()) {
+                    log.add(Helper.gson.fromJson(s, LogEntry.class));
+                }
             }
         }
         try (BufferedReader log2Reader = new BufferedReader(new FileReader(log2File))) {
@@ -50,19 +45,31 @@ class PersistentState {
                 }
             }
         }
-
-//            log.add(new LogEntry(1, new DeleteCommand("x")));
-//            saveToStorage();
     }
 
-    public void saveToStorage() {
+    public void updateCurrentTerm(int newTerm) {
+        if (newTerm > currentTerm) {
+            currentTerm = newTerm;
+            votedFor = null;
+            saveTermAndVotedFor();
+        }
+    }
+
+    public void voteAndIncrementTerm(int votedFor) {
+        currentTerm++;
+        this.votedFor = votedFor;
+        saveTermAndVotedFor();
+    }
+
+    public void setVotedFor(int votedFor) {
+        if (this.votedFor == null || this.votedFor != votedFor) {
+            this.votedFor = votedFor;
+            saveTermAndVotedFor();
+        }
+    }
+
+    private void saveLog() {
         try {
-            try (BufferedWriter log2Writer = new BufferedWriter(new FileWriter(log2FileName))) {
-                log2Writer.write(String.valueOf(currentTerm) + "\n");
-                if (votedFor != null) {
-                    log2Writer.write(String.valueOf(votedFor) + "\n");
-                }
-            }
             try (BufferedWriter logWriter = new BufferedWriter(new FileWriter(logFileName))) {
                 for (LogEntry logEntry : log) {
                     logWriter.write(Helper.gson.toJson(logEntry, LogEntry.class) + "\n");
@@ -71,5 +78,53 @@ class PersistentState {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    private void saveTermAndVotedFor() {
+        try {
+            try (BufferedWriter log2Writer = new BufferedWriter(new FileWriter(log2FileName))) {
+                log2Writer.write(String.valueOf(currentTerm) + "\n");
+                if (votedFor != null) {
+                    log2Writer.write(String.valueOf(votedFor) + "\n");
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public LogEntry getLogEntry(int i) {
+        return log.get(i);
+    }
+
+    public int getLogSize() {
+        return log.size();
+    }
+
+    public int getCurrentTerm() {
+        return currentTerm;
+    }
+
+    public List<LogEntry> getLogSuffix(int from) {
+        return new ArrayList<>(log.subList(from, log.size()));
+    }
+
+    public void clearLogSuffix(int from) {
+        log.subList(from, log.size()).clear();
+        saveLog();
+    }
+
+    public Integer getVotedFor() {
+        return votedFor;
+    }
+
+    public void addLogEntries(List<LogEntry> newLogEntries) {
+        log.addAll(newLogEntries);
+        saveLog();
+    }
+
+    public void addLogEntry(LogEntry newLogEntry) {
+        log.add(newLogEntry);
+        saveLog();
     }
 }

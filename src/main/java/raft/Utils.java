@@ -11,8 +11,6 @@ import raft.statemachine.StateMachineCommand;
 
 import java.io.IOException;
 import java.io.Reader;
-import java.nio.ByteBuffer;
-import java.rmi.server.ExportException;
 
 /**
  * Created by root on 14.06.16.
@@ -101,10 +99,6 @@ public final class Utils {
                     }
                 })
                 .create();
-    }
-
-    public static ByteBuffer convertStringToByteBuffer(String s) {
-        return ByteBuffer.wrap(s.getBytes());
     }
 
 }
