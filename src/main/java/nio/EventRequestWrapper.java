@@ -2,7 +2,7 @@ package nio;
 
 import nio.request.Request;
 
-public class EventRequestWrapper extends EventWrapper {
+public class EventRequestWrapper implements EventWrapper {
     private Request request;
     private Callback callback;
 
@@ -17,5 +17,10 @@ public class EventRequestWrapper extends EventWrapper {
 
     public Callback getCallback() {
         return callback;
+    }
+
+    @Override
+    public Transferable getTransferable() {
+        return request;
     }
 }

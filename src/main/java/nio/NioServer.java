@@ -1,6 +1,5 @@
 package nio;
 
-import com.google.gson.JsonSyntaxException;
 import nio.model.DeleteCommand;
 import nio.model.LogEntry;
 import nio.model.SetCommand;
@@ -67,6 +66,17 @@ public class NioServer {
     private int currentLeaderId = 0;
 
     private ConcurrentLinkedQueue<Runnable> updateLogQueue = new ConcurrentLinkedQueue<>();
+    private Queue<CleintToCandidateRequest> cleintToCandidateRequests = new ArrayDeque<>();
+
+    private static class CleintToCandidateRequest {
+        private Request request;
+        private SelectionKey client;
+
+        public CleintToCandidateRequest(Request request, SelectionKey client) {
+            this.request = request;
+            this.client = client;
+        }
+    }
 
     public NioServer(Properties.ServerDescr serverDescr, Properties properties, Role role) throws IOException {
         this.serverDescr = serverDescr;
@@ -151,6 +161,16 @@ public class NioServer {
             if (role != Role.LEADER) {
                 checkConvertToCandidate(); // for followers
             }
+            if (role != Role.CANDIDATE) {
+                CleintToCandidateRequest oldRequest = cleintToCandidateRequests.poll();
+                if (oldRequest != null) {
+                    if (role == Role.LEADER) {
+                        executeLeaderRequest(oldRequest.request, oldRequest.client);
+                    } else {
+                        redirectToLeader(oldRequest.request, oldRequest.client);
+                    }
+                }
+            }
 
             try {
                 selector.select(properties.timeout);
@@ -169,61 +189,64 @@ public class NioServer {
                         SelectKeyExtraInfo extraInfo = (SelectKeyExtraInfo) selectedKey.attachment();
 
                         String inputString = Helper.readFromChannel(channelForRead);
+                        boolean validInput = true;
                         if (inputString == null) {
                             Log.e(serverName, "Disconnected: " + selectedKey.hashCode());
                             selectedKey.cancel();
                             channelForRead.close();
                         } else {
-                            try {
-                                if (!inputString.isEmpty()) {
-                                    if (extraInfo.isClient()) {
-                                        String[] requestsAsString = inputString.split("\r\n");
-                                        for (String requestAsString : requestsAsString) {
-                                            Request request = Request.deserializeRequest(requestAsString);
-                                            if (request == null) {
-                                                continue;
-                                            }
-                                            Log.d(serverName,
-                                                    "Request: " + Helper.gson.toJson(request, request.getClass()));
-                                            if (request instanceof LeaderOnly && role == Role.FOLLOWER) {
-                                                redirectToLeader(request, selectedKey);
+                            if (!inputString.isEmpty()) {
+                                if (extraInfo.isClient()) {
+                                    String[] requestsAsString = inputString.split("\r\n");
+                                    for (String requestAsString : requestsAsString) {
+                                        Request request = Request.deserializeRequest(requestAsString);
+                                        Log.d(serverName, "Request: "
+                                                + (request != null ? Helper.gson.toJson(request, request.getClass())
+                                                                  : "null"));
+                                        if (request instanceof LeaderOnly && role == Role.FOLLOWER) {
+                                            redirectToLeader(request, selectedKey);
 //                                                extraInfo.addEventWrapper(new EventResponseWrapper(new PingResponse(), null));
-                                            } else if (request instanceof LeaderOnly) {
-                                                // FIXME oops for client
+                                        } else if (request instanceof LeaderOnly) {
+                                            // FIXME oops for client
+                                            if (role == Role.FOLLOWER) {
                                                 executeLeaderRequest(request, selectedKey);
                                             } else {
-                                                if (request instanceof AcceptNodeRequest) {
-                                                    Log.i(serverName, "acceptNodeRequest");
-                                                }
-                                                Response responseForSend = processRequest(request, selectedKey);
-                                                extraInfo.addEventWrapper(new EventResponseWrapper(responseForSend));
+                                                cleintToCandidateRequests.add(new CleintToCandidateRequest(
+                                                        request,
+                                                        selectedKey
+                                                ));
                                             }
-                                        }
-                                    } else {
-                                        String[] responsesAsString = inputString.split("\r\n");
-                                        for (String responseAsString : responsesAsString) {
-                                            EventRequestWrapper lastRequestWrapper = extraInfo.getResponseQueue().poll();
-                                            if (lastRequestWrapper != null) {
-                                                Request request = lastRequestWrapper.getRequest();
-                                                Response response = Response.deserializeResponse(
-                                                        responseAsString,
-                                                        request);
-                                                Log.d(serverName,
-                                                        "Response: " + Helper.gson.toJson(response, response.getClass())
-                                                                + "(" + request.getClass().getSimpleName() + ")");
-                                                if (lastRequestWrapper.getCallback() != null) {
-                                                    lastRequestWrapper.getCallback().onSuccess(response);
-                                                }
-                                            } else {
-                                                Log.e(serverName, "Response without request? " + responseAsString);
+                                        } else {
+                                            if (request instanceof AcceptNodeRequest) {
+                                                Log.i(serverName, "acceptNodeRequest");
+                                            } else if (request instanceof GetRequest) {
+                                                Log.i(serverName, "getRequest");
                                             }
+                                            Response response = processRequest(request, selectedKey);
+                                            extraInfo.addEventWrapper(new EventResponseWrapper(response));
                                         }
                                     }
-                                    selectedKey.interestOps(SelectionKey.OP_WRITE);
+                                } else {
+                                    String[] responsesAsString = inputString.split("\r\n");
+                                    for (String responseAsString : responsesAsString) {
+                                        EventRequestWrapper lastRequestWrapper = extraInfo.getResponseQueue().poll();
+                                        if (lastRequestWrapper != null) {
+                                            Request request = lastRequestWrapper.getRequest();
+                                            Response response = Response.deserializeResponse(
+                                                    responseAsString,
+                                                    request);
+                                            Log.d(serverName,
+                                                    "Response: " + Helper.gson.toJson(response, response.getClass())
+                                                            + "(" + request.getClass().getSimpleName() + ")");
+                                            if (lastRequestWrapper.getCallback() != null) {
+                                                lastRequestWrapper.getCallback().onSuccess(response);
+                                            }
+                                        } else {
+                                            Log.e(serverName, "Response without request? " + responseAsString);
+                                        }
+                                    }
                                 }
-                            } catch (JsonSyntaxException e) {
-                                e.printStackTrace();
-                                Log.e(serverName, inputString);
+                                selectedKey.interestOps(SelectionKey.OP_WRITE);
                             }
                         }
                     } else if (selectedKey.isWritable()) {
@@ -625,8 +648,9 @@ public class NioServer {
             }
             Log.i(serverName, "RequestVote: " + response.isVoteGranted() + " for " + requestVote.getCandidateId());
             return response;
+        } else {
+            return new InvalidRequestResponse();
         }
-        return null;
     }
 
     private void executeLeaderRequest(Request request, SelectionKey selectionKey) {

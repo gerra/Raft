@@ -5,7 +5,7 @@ import nio.response.Response;
 /**
  * Created by root on 16.06.16.
  */
-public class EventResponseWrapper extends EventWrapper {
+public class EventResponseWrapper implements EventWrapper {
     private Response response;
 
     public EventResponseWrapper(Response response) {
@@ -13,6 +13,11 @@ public class EventResponseWrapper extends EventWrapper {
     }
 
     public Response getResponse() {
+        return response;
+    }
+
+    @Override
+    public Transferable getTransferable() {
         return response;
     }
 }
