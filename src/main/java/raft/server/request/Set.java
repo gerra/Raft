@@ -1,7 +1,6 @@
 package raft.server.request;
 
 import raft.Utils;
-import raft.statemachine.DeleteCommand;
 import raft.statemachine.SetCommand;
 
 import java.io.IOException;

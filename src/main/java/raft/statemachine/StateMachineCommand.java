@@ -1,7 +1,5 @@
 package raft.statemachine;
 
-import raft.Utils;
-
 import java.io.IOException;
 import java.io.Reader;
 

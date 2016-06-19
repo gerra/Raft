@@ -1,7 +1,6 @@
 package nio.model;
 
 import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Created by root on 16.06.16.

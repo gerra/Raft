@@ -1,7 +1,6 @@
 package nio.response;
 
 import nio.Helper;
-import nio.request.RequestVoteRequest;
 
 /**
  * Created by root on 17.06.16.

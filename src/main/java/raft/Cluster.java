@@ -1,10 +1,8 @@
 package raft;
 
-import nio.NioServer;
 import nio.Properties;
 import raft.server.Server;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 

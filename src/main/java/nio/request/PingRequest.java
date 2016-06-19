@@ -1,7 +1,5 @@
 package nio.request;
 
-import sun.dc.pr.PRError;
-
 /**
  * Created by root on 16.06.16.
  */
