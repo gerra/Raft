@@ -38,7 +38,7 @@ class PersistentState {
         try (BufferedReader log2Reader = new BufferedReader(new FileReader(log2File))) {
             String termS = log2Reader.readLine();
             String votedS = log2Reader.readLine();
-            if (termS != null) {
+            if (termS != null && !termS.isEmpty()) {
                 currentTerm = Integer.parseInt(termS);
                 if (votedS != null) {
                     votedFor = Integer.parseInt(votedS);

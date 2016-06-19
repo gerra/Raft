@@ -8,8 +8,7 @@ import nio.response.Response;
 public class EventResponseWrapper extends EventWrapper {
     private Response response;
 
-    public EventResponseWrapper(Response response, Callback callback) {
-        super(callback);
+    public EventResponseWrapper(Response response) {
         this.response = response;
     }
 

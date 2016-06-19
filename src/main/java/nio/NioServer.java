@@ -10,7 +10,6 @@ import nio.response.*;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
@@ -48,13 +47,13 @@ public class NioServer {
     }
 
     private Selector selector;
-    ServerSocketChannel serverSocket;
+    private ServerSocketChannel serverSocket;
 
     private Properties.ServerDescr serverDescr;
     private Properties properties;
     private final String serverName;
-    private volatile Role role;
 
+    private volatile Role role;
     private StateMachine stateMachine;
     private PersistentState persistentState;
     private VolatileState volatileState;
@@ -68,42 +67,6 @@ public class NioServer {
     private int currentLeaderId = 0;
 
     private ConcurrentLinkedQueue<Runnable> updateLogQueue = new ConcurrentLinkedQueue<>();
-
-    private String readFromChannel(SocketChannel socketChannel) throws IOException {
-        StringBuilder requestBuilder = new StringBuilder();
-        ByteBuffer byteBuffer = ByteBuffer.allocate(256);
-        int wasRead;
-        try {
-            while ((wasRead = socketChannel.read(byteBuffer)) > 0) {
-                byteBuffer.clear();
-                requestBuilder.append(new String(byteBuffer.array(), 0, wasRead));
-            }
-        } catch (Exception ignored) {
-            wasRead = -1;
-        }
-        byteBuffer.clear();
-        if (wasRead < 0) {
-            return null;
-        }
-        return requestBuilder.toString();
-    }
-
-    private int writeToChannel(ByteBuffer byteBuffer, SocketChannel socketChannel) {
-        try {
-            int total = 0;
-            while (byteBuffer.hasRemaining()) {
-                int written = socketChannel.write(byteBuffer);
-                if (written < 0) {
-                    return -1;
-                }
-                total += written;
-            }
-            return total;
-        } catch (IOException e) {
-            e.printStackTrace();
-            return -1;
-        }
-    }
 
     public NioServer(Properties.ServerDescr serverDescr, Properties properties, Role role) throws IOException {
         this.serverDescr = serverDescr;
@@ -122,9 +85,9 @@ public class NioServer {
         selector = Selector.open();
         serverSocket = ServerSocketChannel.open();
         InetSocketAddress inetSocketAddress = new InetSocketAddress(serverDescr.address.port);
-
         serverSocket.bind(inetSocketAddress);
         serverSocket.configureBlocking(false);
+        serverSocket.register(selector, SelectionKey.OP_ACCEPT);
 
         for (Properties.ServerDescr otherServerDescr : properties.serverDescrs) {
             if (otherServerDescr.id != serverDescr.id) {
@@ -132,7 +95,9 @@ public class NioServer {
             }
         }
 
-        serverSocket.register(selector, SelectionKey.OP_ACCEPT);
+        long currentTime = System.currentTimeMillis();
+        lastTimeLogReceived = currentTime;
+        lastTimeVoteGranted = currentTime;
 
         if (role == Role.LEADER) {
             startTimerTask();
@@ -159,9 +124,6 @@ public class NioServer {
     }
 
     private void startElections() {
-        if (electionsStartTime == -1 && role == Role.CANDIDATE) {
-            electionsStartTime = System.currentTimeMillis();
-        }
         if (role != Role.CANDIDATE || System.currentTimeMillis() - electionsStartTime > electionTimeOut) {
             Log.i(serverName, "Start voting!");
             electionTimeOut = new Random().nextInt(150) + 150;
@@ -174,12 +136,6 @@ public class NioServer {
 
     private void checkConvertToCandidate() {
         long currentTime = System.currentTimeMillis();
-        if (lastTimeLogReceived == -1) {
-            lastTimeLogReceived = currentTime;
-        }
-        if (lastTimeVoteGranted == -1) {
-            lastTimeVoteGranted = currentTime;
-        }
         if (currentTime - lastTimeLogReceived > electionTimeOut
                 && currentTime - lastTimeVoteGranted > electionTimeOut) {
             startElections();
@@ -212,9 +168,9 @@ public class NioServer {
                         SocketChannel channelForRead = (SocketChannel) selectedKey.channel();
                         SelectKeyExtraInfo extraInfo = (SelectKeyExtraInfo) selectedKey.attachment();
 
-                        String inputString = readFromChannel(channelForRead);
+                        String inputString = Helper.readFromChannel(channelForRead);
                         if (inputString == null) {
-                            Log.d(serverName, "Disconnected: " + channelForRead.getRemoteAddress());
+                            Log.e(serverName, "Disconnected: " + selectedKey.hashCode());
                             selectedKey.cancel();
                             channelForRead.close();
                         } else {
@@ -223,10 +179,12 @@ public class NioServer {
                                     if (extraInfo.isClient()) {
                                         String[] requestsAsString = inputString.split("\r\n");
                                         for (String requestAsString : requestsAsString) {
-                                            Request request = deserializeRequest(requestAsString);
+                                            Request request = Request.deserializeRequest(requestAsString);
                                             if (request == null) {
                                                 continue;
                                             }
+                                            Log.d(serverName,
+                                                    "Request: " + Helper.gson.toJson(request, request.getClass()));
                                             if (request instanceof LeaderOnly && role == Role.FOLLOWER) {
                                                 redirectToLeader(request, selectedKey);
 //                                                extraInfo.addEventWrapper(new EventResponseWrapper(new PingResponse(), null));
@@ -234,8 +192,11 @@ public class NioServer {
                                                 // FIXME oops for client
                                                 executeLeaderRequest(request, selectedKey);
                                             } else {
+                                                if (request instanceof AcceptNodeRequest) {
+                                                    Log.i(serverName, "acceptNodeRequest");
+                                                }
                                                 Response responseForSend = processRequest(request, selectedKey);
-                                                extraInfo.addEventWrapper(new EventResponseWrapper(responseForSend, null));
+                                                extraInfo.addEventWrapper(new EventResponseWrapper(responseForSend));
                                             }
                                         }
                                     } else {
@@ -243,9 +204,13 @@ public class NioServer {
                                         for (String responseAsString : responsesAsString) {
                                             EventRequestWrapper lastRequestWrapper = extraInfo.getResponseQueue().poll();
                                             if (lastRequestWrapper != null) {
-                                                Response response = deserializeResponse(
+                                                Request request = lastRequestWrapper.getRequest();
+                                                Response response = Response.deserializeResponse(
                                                         responseAsString,
-                                                        lastRequestWrapper.getRequest());
+                                                        request);
+                                                Log.d(serverName,
+                                                        "Response: " + Helper.gson.toJson(response, response.getClass())
+                                                                + "(" + request.getClass().getSimpleName() + ")");
                                                 if (lastRequestWrapper.getCallback() != null) {
                                                     lastRequestWrapper.getCallback().onSuccess(response);
                                                 }
@@ -264,15 +229,6 @@ public class NioServer {
                     } else if (selectedKey.isWritable()) {
                         SocketChannel channelForWrite = (SocketChannel) selectedKey.channel();
                         SelectKeyExtraInfo extraInfo = (SelectKeyExtraInfo) selectedKey.attachment();
-//                        if (extraInfo.getLastEventWrapper() != null) {
-//                            if (!extraInfo.getOutputQueue().isEmpty()) {
-//                                Log.e(serverName, "we didn't process previous request "
-//                                        + Helper.gson.toJson(
-//                                            ((EventRequestWrapper) extraInfo.getLastEventWrapper()).getRequest()));
-//                            }
-//                            selectedKey.interestOps(SelectionKey.OP_READ);
-//                            continue;
-//                        }
                         while (!extraInfo.getOutputQueue().isEmpty()) {
                             EventWrapper curEvent = extraInfo.getOutputQueue().poll();
                             String forSend = null;
@@ -281,6 +237,8 @@ public class NioServer {
                                 forSend = request.asString();
                                 if (request instanceof RequestVoteRequest) {
                                     Log.i(serverName, "Sending RequestVote: " + forSend + " to " + extraInfo.getRemoteServerId());
+                                } else if (request instanceof LeaderOnly) {
+                                    Log.i(serverName, "Sending leaderOnly request");
                                 }
                             } else if (curEvent instanceof EventResponseWrapper) {
                                 Response response = ((EventResponseWrapper) curEvent).getResponse();
@@ -291,10 +249,11 @@ public class NioServer {
                             }
                             if (forSend != null) {
                                 Log.d(serverName, "Request or Response: " + forSend);
-                                int written = writeToChannel(Helper.convertStringToByteBuffer(forSend + "\r\n"), channelForWrite);
+                                int written = Helper.writeToChannel(Helper.convertStringToByteBuffer(forSend + "\r\n"), channelForWrite);
                                 if (written < 0) {
                                     selectedKey.cancel();
                                     channelForWrite.close();
+                                    Log.e(serverName, "written < 0 " + forSend);
                                 } else {
                                     if (curEvent instanceof EventRequestWrapper) {
                                         extraInfo.getResponseQueue().add((EventRequestWrapper) curEvent);
@@ -314,17 +273,24 @@ public class NioServer {
 
     private void redirectToLeader(Request request, SelectionKey from) {
         SelectKeyExtraInfo extraInfo = (SelectKeyExtraInfo) from.attachment();
-        SelectionKey leaderSelectionKey = getSelectionKeyByIdForWrite(currentLeaderId);
-        if (leaderSelectionKey != null) {
+        Set<SelectionKey> leaderSelectionKeys = getSelectionKeyByIdForRequest(currentLeaderId);
+        for (SelectionKey leaderSelectionKey : leaderSelectionKeys) {
+            Log.i(serverName, "Redirect to leader: "
+                    + Helper.gson.toJson(request, request.getClass())
+                    + " " + leaderSelectionKey.hashCode());
             leaderSelectionKey.interestOps(SelectionKey.OP_WRITE);
             SelectKeyExtraInfo leaderInfo = (SelectKeyExtraInfo) leaderSelectionKey.attachment();
             leaderInfo.getOutputQueue().add(new EventRequestWrapper(request, new Callback() {
                 @Override
                 public void onSuccess(Response result) {
-                    extraInfo.getOutputQueue().add(new EventResponseWrapper(result, null));
+                    Log.i(serverName, "Gotten redirected result " + result.asString());
+                    extraInfo.getOutputQueue().add(new EventResponseWrapper(result));
                     from.interestOps(SelectionKey.OP_WRITE);
                 }
             }));
+        }
+        if (leaderSelectionKeys.size() > 2) {
+            Log.e(serverName, "2 leader connections");
         }
     }
 
@@ -388,28 +354,27 @@ public class NioServer {
     }
 
     private void requestVoteById(int followerId, Callback<RequestVoteResponse> callback) {
-        SelectionKey selectionKey = getSelectionKeyByIdForWrite(followerId);
-        if (selectionKey == null) {
-            return;
-        }
-        SelectKeyExtraInfo extraInfo = ((SelectKeyExtraInfo) selectionKey.attachment());
-        int logSize = persistentState.getLogSize();
-        RequestVoteRequest request = new RequestVoteRequest(
-                persistentState.getCurrentTerm(),
-                serverDescr.id,
-                logSize - 1,
-                logSize == 0 ? 0 : persistentState.getLogEntry(logSize - 1).getTerm()
-        );
-        extraInfo.getOutputQueue().add(new EventRequestWrapper(
-                request,
-                new Callback<RequestVoteResponse>() {
-                    @Override
-                    public void onSuccess(RequestVoteResponse result) {
-                        callback.onSuccess(result);
-                        checkTermAndConvertToFollower(result.getTerm());
+        Set<SelectionKey> selectionKeys = getSelectionKeyByIdForRequest(followerId);
+        for (SelectionKey selectionKey : selectionKeys) {
+            SelectKeyExtraInfo extraInfo = ((SelectKeyExtraInfo) selectionKey.attachment());
+            int logSize = persistentState.getLogSize();
+            RequestVoteRequest request = new RequestVoteRequest(
+                    persistentState.getCurrentTerm(),
+                    serverDescr.id,
+                    logSize - 1,
+                    logSize == 0 ? 0 : persistentState.getLogEntry(logSize - 1).getTerm()
+            );
+            extraInfo.getOutputQueue().add(new EventRequestWrapper(
+                    request,
+                    new Callback<RequestVoteResponse>() {
+                        @Override
+                        public void onSuccess(RequestVoteResponse result) {
+                            callback.onSuccess(result);
+                            checkTermAndConvertToFollower(result.getTerm());
+                        }
                     }
-                }
-        ));
+            ));
+        }
     }
 
     private void requestVotes() {
@@ -422,7 +387,6 @@ public class NioServer {
                     @Override
                     public void onSuccess(RequestVoteResponse result) {
                         Log.i(serverName, result.isVoteGranted() + " from " + otherServer.id);
-
                         if (result.isVoteGranted()) {
                             granted++;
                         }
@@ -436,11 +400,8 @@ public class NioServer {
     }
 
     private void updateLogOnFollower(int followerId, Callback<AppendEntriesResponse> callback) {
-        if (callback == null) {
-            callback = new AppendEntriesResponseCallback(this);
-        }
-        SelectionKey selectionKey = getSelectionKeyByIdForWrite(followerId);
-        if (selectionKey != null) {
+        Set<SelectionKey> selectionKeys = getSelectionKeyByIdForRequest(followerId);
+        for (SelectionKey selectionKey : selectionKeys) {
             SelectKeyExtraInfo extraInfo = ((SelectKeyExtraInfo) selectionKey.attachment());
             int nextIndex = leaderState.nextIndex.get(followerId);
             int prevLogIndex = nextIndex - 1;
@@ -454,7 +415,6 @@ public class NioServer {
                     volatileState.commitIndex
             );
 
-            final Callback<AppendEntriesResponse> finalCallback = callback;
             final int oldLogSize = persistentState.getLogSize();
             extraInfo.getOutputQueue().add(
                     new EventRequestWrapper(
@@ -479,25 +439,22 @@ public class NioServer {
                                             });
                                         }
                                     }
-                                    finalCallback.onSuccess(result);
-                                }
-
-                                @Override
-                                public void onError(Object object) {
-                                    finalCallback.onError(object);
+                                    if (callback != null) {
+                                        callback.onSuccess(result);
+                                    }
                                 }
                             }
                     )
             );
-        } else {
-            callback.onError(followerId);
+        }
+        if (selectionKeys.size() == 0) {
+            if (callback != null) {
+                callback.onError(followerId);
+            }
         }
     }
 
     private void updateLogOnFollowers(Callback<AppendEntriesResponse> callback) {
-        if (callback == null) {
-            callback = new AppendEntriesResponseCallback(this);
-        }
         for (Properties.ServerDescr follower : properties.serverDescrs) {
             if (follower.id != this.serverDescr.id) {
                 updateLogOnFollower(follower.id, callback);
@@ -510,7 +467,7 @@ public class NioServer {
         for (Runnable runnable : updateLogQueue) {
             if (runnable instanceof UpdateLogRunnable) {
                 UpdateLogRunnable oldLogRunnable = (UpdateLogRunnable) runnable;
-                if (oldLogRunnable.isForAll() && oldLogRunnable.isForAll()) {
+                if (oldLogRunnable.isForAll() && newLogRunnable.isForAll()) {
                     can = false;
                     break;
                 }
@@ -519,18 +476,23 @@ public class NioServer {
         return can && updateLogQueue.add(newLogRunnable);
     }
 
-    private SelectionKey getSelectionKeyByIdForWrite(int id) {
+    private Set<SelectionKey> getSelectionKeyByIdForRequest(int id) {
+        Set<SelectionKey> res = new HashSet<>();
+        int cnt = 0;
         for (SelectionKey selectionKey : selector.keys()) {
-            if (selectionKey.isValid() && selectionKey.channel() instanceof SocketChannel && selectionKey.attachment() != null) {
+            if (selectionKey.isValid()
+                    && selectionKey.channel() instanceof SocketChannel
+                    && selectionKey.attachment() != null) {
                 SelectKeyExtraInfo extraInfo = ((SelectKeyExtraInfo) selectionKey.attachment());
                 if (extraInfo.getRemoteServerId() == id
                         && !extraInfo.isClient()
-                        ) {
-                    return selectionKey;
+                        && extraInfo.isAccepted()) {
+                    cnt++;
+                    res.add(selectionKey);
                 }
             }
         }
-        return null;
+        return res;
     }
 
     private SelectionKey makeConnectionToOtherServer(Properties.ServerDescr otherServerDescr) {
@@ -541,6 +503,7 @@ public class NioServer {
             otherServerSocket.configureBlocking(false);
             SelectionKey selectionKey = otherServerSocket.register(selector, SelectionKey.OP_WRITE);
             SelectKeyExtraInfo extraInfo = new SelectKeyExtraInfo(false);
+            extraInfo.setAccepted(true);
             extraInfo.setRemoteServerId(otherServerDescr.id);
             selectionKey.attach(extraInfo);
             return selectionKey;
@@ -557,61 +520,18 @@ public class NioServer {
         SelectionKey selectionKey = makeConnectionToOtherServer(otherServerDescr);
         if (selectionKey != null) {
             SelectKeyExtraInfo extraInfo = (SelectKeyExtraInfo) selectionKey.attachment();
-            extraInfo.addEventWrapper(
-                    new EventRequestWrapper(new AcceptNodeRequest(serverDescr.id), new Callback<AcceptNodeResponse>() {
+            extraInfo.addEventWrapper(new EventRequestWrapper(
+                    new AcceptNodeRequest(serverDescr.id),
+                    new Callback<AcceptNodeResponse>() {
                         @Override
                         public void onSuccess(AcceptNodeResponse result) {
+                            Log.i(serverName, otherServerDescr.id + " accepted us");
                             extraInfo.setAccepted(true);
                         }
-                    })
-            );
+                    }));
             extraInfo.setRemoteServerId(otherServerDescr.id);
         } else {
             Log.e(serverName, "Unable to send request to node." + otherServerDescr.id);
-        }
-    }
-
-    private Request deserializeRequest(String requestString) {
-        requestString = requestString.replaceAll("\r\n", "");
-        Log.d(serverName, "Request: " + requestString);
-        if (requestString.startsWith("node")) {
-            return AcceptNodeRequest.fromString(requestString);
-        } else if (requestString.startsWith("ping")) {
-            return PingRequest.fromString(requestString);
-        } else if (requestString.startsWith("set")) {
-            return SetRequest.fromString(requestString);
-        } else if (requestString.startsWith("appendEntries")) {
-            return AppendEntriesRequest.fromString(requestString);
-        } else if (requestString.startsWith("delete")) {
-            return DeleteRequest.fromString(requestString);
-        } else if (requestString.startsWith("get")) {
-            return GetRequest.fromString(requestString);
-        } else if (requestString.startsWith("requestVote")) {
-            return RequestVoteRequest.fromString(requestString);
-        }  else {
-            return null;
-        }
-    }
-
-    private Response deserializeResponse(String responseString, Request request) {
-        responseString = responseString.replace("\r\n", "");
-        Log.d(serverName, "Response: " + responseString + "(" + request.getClass().getSimpleName() + ")");
-        if (request instanceof PingRequest) {
-            return PingResponse.fromString(responseString);
-        } else if (request instanceof AcceptNodeRequest) {
-            return AcceptNodeResponse.fromString(responseString);
-        } else if (request instanceof SetRequest) {
-            return SetResponse.fromString(responseString);
-        } else if (request instanceof AppendEntriesRequest) {
-            return AppendEntriesResponse.fromString(responseString);
-        } else if (request instanceof DeleteRequest) {
-            return DeleteResponse.fromString(responseString);
-        } else if (request instanceof GetRequest) {
-            return GetResponse.fromString(responseString);
-        } else if (request instanceof RequestVoteRequest) {
-            return RequestVoteResponse.fromString(responseString);
-        } else {
-            throw new IllegalArgumentException("Unknown response");
         }
     }
 
@@ -642,8 +562,7 @@ public class NioServer {
             int prevLogIndex = appendEntries.getPrevLogIndex();
             int prevLogTerm = appendEntries.getPrevLogTerm();
             AppendEntriesResponse response;
-            if (prevLogIndex != -1 && persistentState.
-                    getCurrentTerm() > appendEntries.getTerm()) {
+            if (persistentState.getCurrentTerm() > appendEntries.getTerm()) {
                 response = new AppendEntriesResponse(persistentState.getCurrentTerm(), false);
             } else if (prevLogIndex != -1 && (logSize <= prevLogIndex || persistentState.getLogEntry(prevLogIndex).getTerm() != prevLogTerm)) {
                 response = new AppendEntriesResponse(persistentState.getCurrentTerm(), false);
@@ -711,6 +630,7 @@ public class NioServer {
     }
 
     private void executeLeaderRequest(Request request, SelectionKey selectionKey) {
+        Log.i(serverName, Helper.gson.toJson(request, request.getClass()));
         // candidate
         int needForResponse = properties.serverDescrs.size() / 2;
         LogEntry logEntry;
@@ -724,7 +644,7 @@ public class NioServer {
             onCommitEntry = () -> {
                 if (selectionKey.isValid()) {
                     ((SelectKeyExtraInfo) selectionKey.attachment()).getOutputQueue()
-                            .add(new EventResponseWrapper(new SetResponse(), null));
+                            .add(new EventResponseWrapper(new SetResponse()));
                     selectionKey.interestOps(SelectionKey.OP_WRITE);
                 }
             };
@@ -738,7 +658,7 @@ public class NioServer {
                 if (selectionKey.isValid()) {
                     boolean result = logEntry.getCommand().getResult();
                     ((SelectKeyExtraInfo) selectionKey.attachment()).getOutputQueue()
-                            .add(new EventResponseWrapper(new DeleteResponse(result), null));
+                            .add(new EventResponseWrapper(new DeleteResponse(result)));
                 }
                 selectionKey.interestOps(SelectionKey.OP_WRITE);
             };

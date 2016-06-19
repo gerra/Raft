@@ -10,8 +10,8 @@ import nio.model.SetCommand;
 import nio.model.StateMachineCommand;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 
 /**
  * Created by root on 16.06.16.
@@ -57,15 +57,43 @@ public class Helper {
             })
             .create();
 
-    public static int skipSpaces(InputStream is) throws IOException {
-        int c = is.read();
-        while (Character.isSpaceChar(c)) {
-            c = is.read();
-        }
-        return c;
-    }
-
     public static ByteBuffer convertStringToByteBuffer(String s) {
         return ByteBuffer.wrap(s.getBytes());
+    }
+
+    static String readFromChannel(SocketChannel socketChannel) throws IOException {
+        StringBuilder requestBuilder = new StringBuilder();
+        ByteBuffer byteBuffer = ByteBuffer.allocate(256);
+        int wasRead;
+        try {
+            while ((wasRead = socketChannel.read(byteBuffer)) > 0) {
+                byteBuffer.clear();
+                requestBuilder.append(new String(byteBuffer.array(), 0, wasRead));
+            }
+        } catch (Exception ignored) {
+            wasRead = -1;
+        }
+        byteBuffer.clear();
+        if (wasRead < 0) {
+            return null;
+        }
+        return requestBuilder.toString();
+    }
+
+    static int writeToChannel(ByteBuffer byteBuffer, SocketChannel socketChannel) {
+        try {
+            int total = 0;
+            while (byteBuffer.hasRemaining()) {
+                int written = socketChannel.write(byteBuffer);
+                if (written < 0) {
+                    return -1;
+                }
+                total += written;
+            }
+            return total;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return -1;
+        }
     }
 }
